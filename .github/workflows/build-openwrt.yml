@@ -1,14 +1,7 @@
-#
-# Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
-#
-# https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt using GitHub Actions
-#
-
 name: Build OpenWrt
+
+permissions:
+  contents: write
 
 on:
   repository_dispatch:
@@ -20,8 +13,8 @@ on:
         default: 'false'
 
 env:
-  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-6.6
-  REPO_BRANCH: openwrt-24.10-6.6
+  REPO_URL: https://github.com/chasey-dev/immortalwrt-mt798x-rebase
+  REPO_BRANCH: 25.12
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
@@ -35,19 +28,22 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
     - name: Checkout
-      uses: actions/checkout@main
+      uses: actions/checkout@v4
 
     - name: Initialization environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo -E apt-get -qq update
-        sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2004)
+        sudo -E apt-get -qq install -y \
+          build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+          gettext git libncurses-dev libssl-dev python3-setuptools rsync swig \
+          unzip zlib1g-dev file wget libelf-dev libfuse-dev zstd ccache qemu-utils time
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
@@ -58,7 +54,7 @@ jobs:
       working-directory: /workdir
       run: |
         df -hT $PWD
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
     - name: Load custom feeds
@@ -72,19 +68,24 @@ jobs:
       run: cd openwrt && ./scripts/feeds update -a
 
     - name: Install feeds
-      run: cd openwrt && ./scripts/feeds install -a
+      run: |
+        cd openwrt
+        ./scripts/feeds install -a
+        ./scripts/feeds install -a -f -p passwall_packages
+        ./scripts/feeds install -a -f -p passwall2
 
     - name: Load custom configuration
       run: |
         [ -e files ] && mv files openwrt/files
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+        grep -Ev '^(CONFIG_TARGET_MULTI_PROFILE|CONFIG_TARGET_PER_DEVICE_ROOTFS|CONFIG_TARGET_DEVICE_|CONFIG_PACKAGE_openssh-sftp-server)' openwrt/defconfig/mt7981-ax3000.config > openwrt/.config
+        [ -e $CONFIG_FILE ] && cat $CONFIG_FILE >> openwrt/.config
         chmod +x $DIY_P2_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
     - name: SSH connection to Actions
       uses: P3TERX/ssh2actions@v1.0.0
-      if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh  != 'false') || contains(github.event.action, 'ssh')
+      if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh != 'false') || contains(github.event.action, 'ssh')
       env:
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -94,6 +95,8 @@ jobs:
       run: |
         cd openwrt
         make defconfig
+        echo "=== Resolved config summary ==="
+        grep -E 'CONFIG_TARGET_mediatek_filogic_DEVICE_|passwall2|xray-core|sing-box|openlist|ksmbd|vsftpd|openssh-sftp-server|btrfs|ntfs3|lucky|zerotier|ttyd' .config | head -n 80 || true
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
@@ -114,13 +117,12 @@ jobs:
       run: df -hT
 
     - name: Upload bin directory
-      uses: actions/upload-artifact@main
+      uses: actions/upload-artifact@v4
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
         name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: openwrt/bin
 
-    # 🔧 修复一：增加 steps.compile.outputs.status == 'success' 判断，防止编译失败后继续执行报错
     - name: Organize files
       id: organize
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true' && !cancelled()
@@ -135,47 +137,29 @@ jobs:
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware directory
-      uses: actions/upload-artifact@main
+      uses: actions/upload-artifact@v4
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
-    - name: Upload firmware to cowtransfer
-      id: cowtransfer
-      if: steps.organize.outputs.status == 'success' && env.UPLOAD_COWTRANSFER == 'true' && !cancelled()
-      run: |
-        curl -fsSL git.io/file-transfer | sh
-        ./transfer cow --block 2621440 -s -p 64 --no-progress ${FIRMWARE} 2>&1 | tee cowtransfer.log
-        echo "::warning file=cowtransfer.com::$(cat cowtransfer.log | grep https)"
-        echo "url=$(cat cowtransfer.log | grep https | cut -f3 -d" ")" >> $GITHUB_OUTPUT
-
-    - name: Upload firmware to WeTransfer
-      id: wetransfer
-      if: steps.organize.outputs.status == 'success' && env.UPLOAD_WETRANSFER == 'true' && !cancelled()
-      run: |
-        curl -fsSL git.io/file-transfer | sh
-        ./transfer wet -s -p 16 --no-progress ${FIRMWARE} 2>&1 | tee wetransfer.log
-        echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https)"
-        echo "url=$(cat wetransfer.log | grep https | cut -f3 -d" ")" >> $GITHUB_OUTPUT
-
-    # 🔧 修复二：同样增加编译成功状态判断，阻断异常链条
     - name: Generate release tag
       id: tag
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        echo "release_tag=$(date +"%Y.%m.%d-%H%M-immortalwrt24.10-6.6-cmcc_rax3000m-237")" >> $GITHUB_OUTPUT
-        touch release.txt
-        echo "cmcc_rax3000m-237大功率固件" >> release.txt
-        echo "后台：192.168.6.1" >> release.txt
-        echo "账号：root" >> release.txt
-        echo "密码：无" >> release.txt
-        echo "默认主题：Argon" >> release.txt
-        echo "集成插件：aria2 openlist2 diskman lucky ksmb hd-idle autoreboot mtwifi-cfg passwall zerotier" >> release.txt
-        echo "编译源码：https://github.com/padavanonly/immortalwrt-mt798x-6.6" >> release.txt
+        echo "release_tag=$(date +"%Y.%m.%d-%H%M-immortalwrt25.12-6.12-cmcc_rax3000m")" >> $GITHUB_OUTPUT
+        cat <<'EOF' > release.txt
+        CMCC RAX3000M (128M NAND, FIT sysupgrade.itb) 闭源驱动轻 NAS 固件
+        后台：192.168.212.1 | 账号：root | 密码：无 | 默认主题：Argon
+        集成插件：passwall2(xray-core) openlist ksmbd wsdd2 vsftpd diskman hd-idle btrfs ntfs3 ttyd lucky zerotier mtwifi-cfg turboacc-mtk
+        编译源码：https://github.com/chasey-dev/immortalwrt-mt798x-rebase (25.12 / Linux 6.12)
+        注意：
+        1. 从 24.10 跨大版本升级至 25.12 请勿保留配置。
+        2. 刷机后请将 OpenList 数据与缓存目录设置到外挂硬盘。
+        3. 勿在防火墙或 TurboACC 中开启 Flow Offload，以免与 MTK HNAT 硬件加速冲突。
+        EOF
         echo "status=success" >> $GITHUB_OUTPUT
 
-    # 🔧 修复三：版本号升级为 v2，消除 Node.js 20 的弃用警告
     - name: Upload firmware to release
       uses: softprops/action-gh-release@v2
       if: steps.tag.outputs.status == 'success' && !cancelled()

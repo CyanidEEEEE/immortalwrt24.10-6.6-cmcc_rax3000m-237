@@ -1,44 +1,25 @@
-**English** | [中文](https://p3terx.com/archives/build-openwrt-with-github-actions.html)
+# CMCC RAX3000M ImmortalWrt 25.12 (Linux 6.12) 闭源驱动轻 NAS 固件
 
-# Actions-OpenWrt
+基于 [`chasey-dev/immortalwrt-mt798x-rebase`](https://github.com/chasey-dev/immortalwrt-mt798x-rebase) `25.12` 分支（Linux 6.12 + MTK 闭源无线驱动 + WED v2 / HNAT 硬件加速）自动云编译。
 
-[![LICENSE](https://img.shields.io/github/license/mashape/apistatus.svg?style=flat-square&label=LICENSE)](https://github.com/P3TERX/Actions-OpenWrt/blob/master/LICENSE)
-![GitHub Stars](https://img.shields.io/github/stars/P3TERX/Actions-OpenWrt.svg?style=flat-square&label=Stars&logo=github)
-![GitHub Forks](https://img.shields.io/github/forks/P3TERX/Actions-OpenWrt.svg?style=flat-square&label=Forks&logo=github)
+## 固件信息
 
-A template for building OpenWrt with GitHub Actions
+- **分支**：`openwrt-25.12`（保留 `openwrt-24.10-6.6` 旧分支可随时回滚）
+- **目标设备**：CMCC RAX3000M（128M NAND，主线 U-Bootmod FIT 布局，产物为 `sysupgrade.itb`）
+- **管理后台**：`192.168.212.1` | 账号：`root` | 密码：无 | 主题：`Argon`
+- **包管理器**：`apk`（OpenWrt / ImmortalWrt 25.12 原生切换，已取代 `opkg`）
 
-## Usage
+## 集成插件与文件系统
 
-- Click the [Use this template](https://github.com/P3TERX/Actions-OpenWrt/generate) button to create a new repository.
-- Generate `.config` files using [Lean's OpenWrt](https://github.com/coolsnowwolf/lede) source code. ( You can change it through environment variables in the workflow file. )
-- Push `.config` file to the GitHub repository.
-- Select `Build OpenWrt` on the Actions page.
-- Click the `Run workflow` button.
-- When the build is complete, click the `Artifacts` button in the upper right corner of the Actions page to download the binaries.
+- **代理**：`luci-app-passwall2`（仅集成 `xray-core` + `nftables` 透明代理，已剔除 `sing-box` 与 `iptables` 冗余）
+- **轻 NAS 服务**：`luci-app-ksmbd` + `wsdd2`、`luci-app-vsftpd`（不含 `openssh-sftp-server`）、原生 `luci-app-openlist`
+- **磁盘与功耗**：`luci-app-diskman`、`luci-app-hd-idle`、`zram-swap`
+- **文件系统与 USB**：`kmod-fs-btrfs` + `btrfs-progs`、`kmod-fs-ext4` + `e2fsprogs`、`kmod-fs-ntfs3` + `ntfs3-mount` + `ntfs-3g-utils` + `kmod-nls-utf8`、`kmod-fs-exfat`、`kmod-fs-vfat`、`kmod-usb-storage` + `kmod-usb-storage-uas` + `kmod-usb3`
+- **常用工具**：`luci-app-ttyd`、`luci-app-lucky`、`luci-app-zerotier`
 
-## Tips
+## 使用与刷机注意事项
 
-- It may take a long time to create a `.config` file and build the OpenWrt firmware. Thus, before create repository to build your own firmware, you may check out if others have already built it which meet your needs by simply [search `Actions-Openwrt` in GitHub](https://github.com/search?q=Actions-openwrt).
-- Add some meta info of your built firmware (such as firmware architecture and installed packages) to your repository introduction, this will save others' time.
-
-## Credits
-
-- [Microsoft Azure](https://azure.microsoft.com)
-- [GitHub Actions](https://github.com/features/actions)
-- [OpenWrt](https://github.com/openwrt/openwrt)
-- [Lean's OpenWrt](https://github.com/coolsnowwolf/lede)
-- [tmate](https://github.com/tmate-io/tmate)
-- [mxschmitt/action-tmate](https://github.com/mxschmitt/action-tmate)
-- [csexton/debugger-action](https://github.com/csexton/debugger-action)
-- [Cowtransfer](https://cowtransfer.com)
-- [WeTransfer](https://wetransfer.com/)
-- [Mikubill/transfer](https://github.com/Mikubill/transfer)
-- [softprops/action-gh-release](https://github.com/softprops/action-gh-release)
-- [ActionsRML/delete-workflow-runs](https://github.com/ActionsRML/delete-workflow-runs)
-- [dev-drprasad/delete-older-releases](https://github.com/dev-drprasad/delete-older-releases)
-- [peter-evans/repository-dispatch](https://github.com/peter-evans/repository-dispatch)
-
-## License
-
-[MIT](https://github.com/P3TERX/Actions-OpenWrt/blob/main/LICENSE) © [**P3TERX**](https://p3terx.com)
+1. **禁止保留配置升级**：从 24.10（`opkg` / 6.6）跨大版本刷入 25.12（`apk` / 6.12）时，请务必取消勾选“保留配置”，刷机后清理浏览器缓存。
+2. **OpenList 路径设置**：首次启动后请在 OpenList 配置中将数据目录与临时缓存目录指到外挂硬盘，避免写入 128M NAND overlay。
+3. **硬件加速互斥**：固件默认启用 MTK HNAT + WED 硬件加速，请勿在防火墙或 TurboACC 中额外开启软件/硬件 Flow Offloading，否则可能引发冲突重启。
+4. **定时更新检查**：如需每日自动检测上游更新生效，请在 GitHub 仓库 `Settings → General → Default branch` 将默认分支切换为 `openwrt-25.12`。
